@@ -31,7 +31,6 @@ export async function GET(request: NextRequest) {
         client_id: CONFIG.ANILIST_ID,
         client_secret: CONFIG.ANILIST_SECRET,
         code,
-        redirect_uri: CONFIG.REDIRECT_URI,
       }),
     });
 
