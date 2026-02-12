@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 const CONFIG = {
   ANILIST_ID: process.env.NEXT_PUBLIC_ANILIST_CLIENT_ID || '',
   ANILIST_SECRET: process.env.ANILIST_CLIENT_SECRET || '',
+  REDIRECT_URI: `${process.env.NEXT_PUBLIC_ANILIST_REDIRECT_URI || 'http://localhost:3000'}/api/auth/anilist/callback`,
   BACKEND_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:54321/functions/v1',
   IS_PROD: process.env.NODE_ENV === 'production',
 };
@@ -31,6 +32,7 @@ export async function GET(request: NextRequest) {
         client_id: CONFIG.ANILIST_ID,
         client_secret: CONFIG.ANILIST_SECRET,
         code,
+        redirect_uri: CONFIG.REDIRECT_URI,
       }),
     });
 
