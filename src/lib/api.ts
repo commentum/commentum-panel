@@ -1,4 +1,5 @@
 // --- Types & Interfaces ---
+// deno-lint-ignore-file no-explicit-any require-await
 export type UserRole = 'user' | 'moderator' | 'admin';
 export type CommentStatus = 'active' | 'hidden' | 'removed';
 
@@ -7,6 +8,7 @@ export interface User {
   username: string;
   role: UserRole;
   provider: string;
+  avatar_url?: string;
   created_at: string;
 }
 
@@ -17,6 +19,8 @@ export interface Reply {
   username: string;
   created_at: string;
   updated_at: string;
+  user_vote?: number | null;
+  avatar_url?: string;
 }
 
 export interface Comment {
@@ -30,6 +34,8 @@ export interface Comment {
   replies?: Reply[];
   has_more_replies: boolean;
   replies_count: number;
+  user_vote?: number | null;
+  avatar_url?: string;
 }
 
 export class AppError extends Error {
@@ -167,6 +173,14 @@ export class CommentumApi {
     return this.request<{ message: string }>('/comments-report', 'POST', { comment_id: commentId, reason });
   }
 
+  static async updateComment(commentId: string, content: string) {
+    return this.request<{ comment: Comment }>('/comments-update', 'POST', { comment_id: commentId, content });
+  }
+
+  static async deleteComment(commentId: string) {
+    return this.request<{ comment: Partial<Comment> }>('/comments-delete', 'POST', { comment_id: commentId });
+  }
+
   // --- Replies ---
   static async createReply(commentId: string, content: string) {
     return this.request<{ reply: Reply }>('/replies-create', 'POST', { comment_id: commentId, content });
@@ -180,6 +194,14 @@ export class CommentumApi {
 
   static async voteReply(replyId: string, voteType: 1 | -1) {
     return this.request<{ reply_id: string; score: number }>('/replies-vote', 'POST', { reply_id: replyId, vote_type: voteType });
+  }
+
+  static async updateReply(replyId: string, content: string) {
+    return this.request<{ reply: Reply }>('/replies-update', 'POST', { reply_id: replyId, content });
+  }
+
+  static async deleteReply(replyId: string) {
+    return this.request<{ message: string }>('/replies-delete', 'POST', { reply_id: replyId });
   }
 
   // --- Moderation ---
