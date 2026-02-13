@@ -16,8 +16,8 @@ export async function POST(request: NextRequest) {
       return res
     }
 
-    const resp = await fetch(`${BACKEND_API_URL}/auth-logout`, {
-      method: 'POST',
+    const resp = await fetch(`${BACKEND_API_URL}/auth`, {
+      method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     })
 

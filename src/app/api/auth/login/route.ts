@@ -5,7 +5,7 @@ const BACKEND_API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:543
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const resp = await fetch(`${BACKEND_API_URL}/auth-login`, {
+    const resp = await fetch(`${BACKEND_API_URL}/auth`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

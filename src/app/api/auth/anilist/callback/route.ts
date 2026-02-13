@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
     const { access_token } = await tokenResponse.json();
     if (!access_token) return errorRedirect(request, 'no_access_token');
 
-    const loginResponse = await fetch(`${CONFIG.BACKEND_URL}/auth-login`, {
+    const loginResponse = await fetch(`${CONFIG.BACKEND_URL}/auth`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ provider: 'anilist', access_token }),
@@ -71,8 +71,8 @@ export async function GET(request: NextRequest) {
     response.cookies.set('auth_token', jwtToken, cookieConfig);
 
     if (role) {
-      response.cookies.set('auth_role', role, { 
-        ...cookieConfig, 
+      response.cookies.set('auth_role', role, {
+        ...cookieConfig,
         httpOnly: false
       });
     }

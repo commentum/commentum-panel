@@ -1,7 +1,8 @@
 // --- Types & Interfaces ---
 // deno-lint-ignore-file no-explicit-any require-await
+
 export type UserRole = 'user' | 'moderator' | 'admin';
-export type CommentStatus = 'active' | 'hidden' | 'removed';
+export type CommentStatus = 'active' | 'hidden' | 'removed' | 'deleted';
 
 export interface User {
   id: string;
@@ -17,10 +18,11 @@ export interface Reply {
   content: string;
   score: number;
   username: string;
+  avatar_url?: string;
+  parent_id?: string;
   created_at: string;
   updated_at: string;
   user_vote?: number | null;
-  avatar_url?: string;
 }
 
 export interface Comment {
@@ -29,13 +31,13 @@ export interface Comment {
   score: number;
   status: CommentStatus;
   username: string;
+  avatar_url?: string;
   created_at: string;
   updated_at: string;
   replies?: Reply[];
   has_more_replies: boolean;
   replies_count: number;
   user_vote?: number | null;
-  avatar_url?: string;
 }
 
 export class AppError extends Error {
@@ -51,17 +53,10 @@ export class CommentumApi {
   private static BASE_URL = '/api/proxy';
   private static jwtToken: string | null = null;
 
-  /**
-   * Set the JWT token globally. 
-   * On the client, this should be called during app initialization.
-   */
   static setToken(token: string | null) {
     this.jwtToken = token;
   }
 
-  /**
-   * Client-side helper to read the auth_token cookie
-   */
   static getTokenFromCookie(): string | null {
     if (typeof document === 'undefined') return null;
     const value = `; ${document.cookie}`;
@@ -72,17 +67,22 @@ export class CommentumApi {
 
   private static async request<T>(
     endpoint: string,
-    method: 'GET' | 'POST' = 'GET',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' = 'GET',
     body?: any,
-    params?: Record<string, string | number>
+    params?: Record<string, string | number | undefined>
   ): Promise<T> {
-    // 1. Resolve relative or absolute URL
-    // In Next.js client-side, relative works. In SSR, you'd need the full domain.
     let url = `${this.BASE_URL}${endpoint}`;
-    
+
     if (params) {
-      const query = new URLSearchParams(params as any).toString();
-      url += `?${query}`;
+      // Filter out undefined params
+      const cleanParams = Object.entries(params).reduce((acc, [key, value]) => {
+        if (value !== undefined) acc[key] = String(value);
+        return acc;
+      }, {} as Record<string, string>);
+
+      if (Object.keys(cleanParams).length > 0) {
+        url += `?${new URLSearchParams(cleanParams).toString()}`;
+      }
     }
 
     const headers: Record<string, string> = {
@@ -90,9 +90,7 @@ export class CommentumApi {
       'Accept': 'application/json',
     };
 
-    // 2. Prioritize explicitly set token, fallback to cookie
     const activeToken = this.jwtToken || this.getTokenFromCookie();
-
     if (activeToken) {
       headers['Authorization'] = `Bearer ${activeToken}`;
     }
@@ -102,7 +100,6 @@ export class CommentumApi {
         method,
         headers,
         body: body ? JSON.stringify(body) : undefined,
-        // Ensure we don't cache auth-dependent requests
         cache: 'no-store',
       });
 
@@ -123,97 +120,161 @@ export class CommentumApi {
 
   static async login(provider: 'anilist' | 'mal' | 'simkl', accessToken: string) {
     const data = await this.request<{ token: string; user: User }>(
-      '/auth-login',
+      '/auth',
       'POST',
       { provider, access_token: accessToken }
     );
-    
+
     this.setToken(data.token);
 
-    // Persist via Cookie instead of LocalStorage for SSR support
     if (typeof document !== 'undefined') {
       document.cookie = `auth_token=${data.token}; path=/; max-age=604800; SameSite=Lax; Secure`;
     }
-    
+
     return data;
   }
 
   static async logout() {
-    const res = await this.request<{ message: string }>('/auth-logout', 'POST');
+    const res = await this.request<{ message: string }>('/auth', 'DELETE');
     this.setToken(null);
-    
-    // Clear the cookie
     if (typeof document !== 'undefined') {
       document.cookie = 'auth_token=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
     }
-    
     return res;
   }
 
   static async getMe() {
-    return this.request<{ user: User }>('/auth-me');
+    return this.request<{ user: User }>('/me');
   }
 
   // --- Comments ---
-  static async createComment(mediaId: string, content: string) {
-    return this.request<{ comment: Comment }>('/comments-create', 'POST', { mediaId, content });
+
+  static async createComment(media_id: string, content: string) {
+    return this.request<{ post: Comment }>('/posts', 'POST', { media_id, content });
   }
 
-  static async listComments(mediaId: string, limit = 20, cursor?: string) {
-    const params: any = { mediaId, limit };
+  static async listComments(media_id: string, limit = 20, cursor?: string) {
+    const params: any = { media_id, limit };
     if (cursor) params.cursor = cursor;
-    return this.request<{ comments: Comment[]; next_cursor: string | null }>('/comments-list', 'GET', undefined, params);
+    return this.request<{ comments: Comment[]; next_cursor: string | null }>('/posts', 'GET', undefined, params);
   }
 
-  static async voteComment(commentId: string, voteType: 1 | -1) {
-    return this.request<{ comment_id: string; score: number }>('/comments-vote', 'POST', { comment_id: commentId, vote_type: voteType });
+  static async voteComment(comment_id: string, voteType: 1 | -1) {
+    return this.request<{ post_id: string; score: number }>(
+      '/votes',
+      'POST',
+      { post_id: comment_id, vote_type: voteType }
+    );
   }
 
-  static async reportComment(commentId: string, reason: string) {
-    return this.request<{ message: string }>('/comments-report', 'POST', { comment_id: commentId, reason });
+  static async reportComment(comment_id: string, reason: string) {
+    return this.request<{ message: string }>(
+      '/reports',
+      'POST',
+      { post_id: comment_id, reason }
+    );
   }
 
-  static async updateComment(commentId: string, content: string) {
-    return this.request<{ comment: Comment }>('/comments-update', 'POST', { comment_id: commentId, content });
+  static async updateComment(comment_id: string, content: string) {
+    return this.request<{ post: Comment }>(
+      '/posts',
+      'PATCH',
+      { id: comment_id, content }
+    );
   }
 
-  static async deleteComment(commentId: string) {
-    return this.request<{ comment: Partial<Comment> }>('/comments-delete', 'POST', { comment_id: commentId });
+  static async deleteComment(comment_id: string) {
+    return this.request<{ post: Partial<Comment> }>(
+      '/posts',
+      'DELETE',
+      { id: comment_id }
+    );
   }
 
   // --- Replies ---
-  static async createReply(commentId: string, content: string) {
-    return this.request<{ reply: Reply }>('/replies-create', 'POST', { comment_id: commentId, content });
+
+  /**
+   * Create a reply. 
+   * @param parentId - Can be a Root Post ID (for top-level reply) or a Reply ID (for nested reply).
+   */
+  static async createReply(parentId: string, content: string) {
+    // Doc: { "parent_id": "uuid", "content": "..." }
+    return this.request<{ post: Reply }>(
+      '/posts',
+      'POST',
+      { parent_id: parentId, content }
+    );
   }
 
-  static async listReplies(commentId: string, limit = 20, cursor?: string) {
-    const params: any = { comment_id: commentId, limit };
+  /**
+   * List replies.
+   * @param rootId - The ID of the root comment (Required).
+   * @param parentId - The ID of the specific reply to fetch children for (Optional).
+   */
+  static async listReplies(rootId: string, limit = 20, cursor?: string, parentId?: string) {
+    const params: any = { root_id: rootId, limit };
+    if (parentId) params.parent_id = parentId;
     if (cursor) params.cursor = cursor;
-    return this.request<{ replies: Reply[]; next_cursor: string | null }>('/replies-list', 'GET', undefined, params);
+
+    return this.request<{ replies: Reply[]; next_cursor: string | null }>(
+      '/posts',
+      'GET',
+      undefined,
+      params
+    );
   }
 
   static async voteReply(replyId: string, voteType: 1 | -1) {
-    return this.request<{ reply_id: string; score: number }>('/replies-vote', 'POST', { reply_id: replyId, vote_type: voteType });
+    return this.request<{ post_id: string; score: number }>(
+      '/votes',
+      'POST',
+      { post_id: replyId, vote_type: voteType }
+    );
   }
 
   static async updateReply(replyId: string, content: string) {
-    return this.request<{ reply: Reply }>('/replies-update', 'POST', { reply_id: replyId, content });
+    return this.request<{ post: Reply }>(
+      '/posts',
+      'PATCH',
+      { id: replyId, content }
+    );
   }
 
   static async deleteReply(replyId: string) {
-    return this.request<{ message: string }>('/replies-delete', 'POST', { reply_id: replyId });
+    // Doc: { "reply_id": "uuid" }
+    return this.request<{ message: string }>(
+      '/posts',
+      'DELETE',
+      { id: replyId }
+    );
   }
 
   // --- Moderation ---
+
   static async listReports(limit = 20, offset = 0) {
-    return this.request<{ reports: any[] }>('/moderation-reports', 'GET', undefined, { limit, offset });
+    return this.request<{ reports: any[] }>(
+      '/moderation-reports',
+      'GET',
+      undefined,
+      { limit, offset }
+    );
   }
 
-  static async setCommentStatus(commentId: string, status: CommentStatus) {
-    return this.request<{ comment: Partial<Comment> }>('/moderation-comment-status', 'POST', { comment_id: commentId, status });
+  static async setCommentStatus(comment_id: string, status: CommentStatus) {
+    // Doc: { "comment_id": "uuid", "status": "..." }
+    return this.request<{ comment: Partial<Comment> }>(
+      '/moderation-comment-status',
+      'POST',
+      { comment_id: comment_id, status }
+    );
   }
 
   static async banUser(userId: string) {
-    return this.request<{ message: string; user: any }>('/moderation-ban-user', 'POST', { user_id: userId });
+    // Doc: { "user_id": "uuid" }
+    return this.request<{ message: string; user: any }>(
+      '/moderation-ban-user',
+      'POST',
+      { user_id: userId }
+    );
   }
 }
