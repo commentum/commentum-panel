@@ -155,7 +155,7 @@ export default function Admin() {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => handleBanUser(report.comment_author)} disabled>
+                      <DropdownMenuItem onClick={() => handleBanUser()} disabled>
                         <UserMinus className="mr-2 h-4 w-4" /> Ban User (Pending)
                       </DropdownMenuItem>
                     </DropdownMenuContent>
