@@ -1,371 +1,372 @@
-"use client"
+"use client";
 
-import React, { useEffect, useState, useCallback } from 'react'
-import { CommentumApi, Comment, Reply } from '@/lib/api'
-import { useAuth } from '@/context/AuthContext'
-import { cn } from '@/lib/utils'
-
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { CommentumApi, Comment, Reply, Post } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
+import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import { toast } from 'sonner';
 import {
-  ThumbsUp, ThumbsDown, MessageSquare, Send,
-  Loader2, Trash2, Flag, Edit2, X, Check, MoreHorizontal, ShieldAlert
-} from 'lucide-react'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { toast } from 'sonner'
+  Loader2,
+  MessageSquare,
+  ThumbsDown,
+  ThumbsUp,
+  Edit2,
+  Flag,
+  RefreshCw,
+  Send,
+  Trash2,
+  CornerDownRight,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react';
 
-// --- Extended Types ---
-// Ensure your backend actually returns 'avatar_url' in the JSON response for comments/replies
-interface OptimisticReply extends Reply {
-  isPending?: boolean;
-  avatar_url?: string;
-}
-interface OptimisticComment extends Comment {
-  replies?: OptimisticReply[];
-  isPending?: boolean;
-  avatar_url?: string;
+type UiReply = Reply & { children?: UiReply[]; hasLoadedChildren?: boolean; isPending?: boolean };
+type UiComment = Comment & { replies?: UiReply[]; expanded?: boolean; isPending?: boolean };
+
+function byParent(replies: UiReply[], parentId: string) {
+  return replies.filter((item) => item.parent_id === parentId);
 }
 
-export default function ShonenXCommentHub() {
-  const { isAuthenticated, user, role } = useAuth()
-  const [mediaId, setMediaId] = useState('shonenx-movie-1')
-
-  const [comments, setComments] = useState<OptimisticComment[]>([])
-  const [loading, setLoading] = useState(false)
-
-  const [mainContent, setMainContent] = useState('')
-  const [replyingTo, setReplyingTo] = useState<string | null>(null)
-  const [replyContent, setReplyContent] = useState('')
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editContent, setEditContent] = useState('')
-
-  const [isCooldown, setIsCooldown] = useState(false)
-  const isAdmin = role === 'admin' || role === 'moderator'
-
-  const startCooldown = () => {
-    setIsCooldown(true)
-    setTimeout(() => setIsCooldown(false), 2000)
-  }
-
-  const loadComments = useCallback(async () => {
-    setLoading(true)
-    try {
-      const data = await CommentumApi.listComments(mediaId)
-      setComments(data.comments)
-    } catch {
-      toast.error("Failed to sync comments")
-    } finally {
-      setLoading(false)
-    }
-  }, [mediaId])
-
-  useEffect(() => { loadComments() }, [loadComments])
-
-  // --- Voting ---
-  const handleVote = async (id: string, type: 1 | -1, isReply: boolean) => {
-    if (!isAuthenticated) return toast.error("Login to vote")
-    const originalState = JSON.parse(JSON.stringify(comments));
-
-    setComments(prev => prev.map(c => {
-      if (!isReply && c.id === id) return { ...c, score: c.score - (c.user_vote || 0) + type, user_vote: type }
-      if (c.replies) return { ...c, replies: c.replies.map(r => r.id === id ? { ...r, score: r.score - (r.user_vote || 0) + type, user_vote: type } : r) }
-      return c
-    }))
-
-    try {
-      isReply ? await CommentumApi.voteReply(id, type) : await CommentumApi.voteComment(id, type)
-    } catch {
-      setComments(originalState)
-      toast.error("Vote failed")
-    }
-  }
-
-  // --- Create Root Comment ---
-  const handlePostMain = async () => {
-    if (!mainContent.trim() || isCooldown) return
-    startCooldown()
-
-    const tempId = `temp-${Date.now()}`
-    const newComment: OptimisticComment = {
-      id: tempId, content: mainContent, score: 0, username: user?.username || 'You',
-      avatar_url: user?.avatar_url, // Use local user avatar immediately
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
-      status: 'active', replies: [], has_more_replies: false, replies_count: 0, isPending: true
-    }
-
-    setComments(prev => [...prev, newComment])
-    setMainContent('')
-
-    try {
-      const { post: comment } = await CommentumApi.createComment(mediaId, newComment.content)
-      setComments(prev => prev.map(c => c.id === tempId ? { ...comment, replies: [] } : c))
-    } catch {
-      setComments(prev => prev.filter(c => c.id !== tempId))
-      toast.error("Failed to post")
-    }
-  }
-
-  // --- Create Reply ---
-  const handlePostReply = async (parentId: string) => {
-    if (!replyContent.trim() || isCooldown) return
-    startCooldown()
-
-    const tempId = `temp-${Date.now()}`
-    const newReply: OptimisticReply = {
-      id: tempId, content: replyContent, score: 0, username: user?.username || 'You',
-      avatar_url: user?.avatar_url, // Use local user avatar immediately
-      created_at: new Date().toISOString(), updated_at: new Date().toISOString(), isPending: true
-    }
-
-    setComments(prev => prev.map(c =>
-      c.id === parentId ? { ...c, replies: [...(c.replies || []), newReply], replies_count: c.replies_count + 1 } : c
-    ))
-    setReplyContent('')
-    setReplyingTo(null)
-
-    try {
-      const { post: reply } = await CommentumApi.createReply(parentId, newReply.content)
-      setComments(prev => prev.map(c =>
-        c.id === parentId ? { ...c, replies: c.replies?.map(r => r.id === tempId ? reply : r) } : c
-      ))
-    } catch {
-      toast.error("Failed to post reply")
-      loadComments()
-    }
-  }
-
-  // --- Edit & Delete ---
-  const startEditing = (id: string, currentContent: string) => {
-    setEditingId(id)
-    setEditContent(currentContent)
-  }
-
-  const handleSaveEdit = async (id: string, isReply: boolean) => {
-    if (!editContent.trim()) return
-    const originalState = [...comments]
-
-    setComments(prev => prev.map(c => {
-      if (!isReply && c.id === id) return { ...c, content: editContent }
-      if (c.replies) return { ...c, replies: c.replies.map(r => r.id === id ? { ...r, content: editContent } : r) }
-      return c
-    }))
-    setEditingId(null)
-
-    try {
-      isReply ? await CommentumApi.updateReply(id, editContent) : await CommentumApi.updateComment(id, editContent)
-      toast.success("Updated")
-    } catch {
-      setComments(originalState)
-      toast.error("Update failed")
-    }
-  }
-
-  const handleDelete = async (id: string, isReply: boolean) => {
-    if (!confirm("Are you sure you want to delete this?")) return
-    try {
-      setComments(prev => {
-        if (!isReply) return prev.filter(c => c.id !== id)
-        return prev.map(c => ({ ...c, replies: c.replies?.filter(r => r.id !== id) }))
-      })
-      isReply ? await CommentumApi.deleteReply(id) : await CommentumApi.setCommentStatus(id, 'removed')
-      toast.success("Deleted")
-    } catch {
-      toast.error("Delete failed")
-      loadComments()
-    }
-  }
-
-  const handleReport = async (id: string) => {
-    const reason = window.prompt("Reason for reporting:")
-    if (reason) {
-      try {
-        await CommentumApi.reportComment(id, reason)
-        toast.success("Report submitted")
-      } catch (err: any) {
-        toast.error(err.message || "Failed to submit report")
-      }
-    }
-  }
-
+function PostAvatar({ username, avatar }: { username: string; avatar: string | null | undefined }) {
   return (
-    <div className="flex flex-col min-h-screen bg-background relative pb-28">
+    <Avatar className="h-8 w-8 border">
+      <AvatarImage src={avatar ?? undefined} className="object-cover" />
+      <AvatarFallback>{username[0]?.toUpperCase() ?? '?'}</AvatarFallback>
+    </Avatar>
+  );
+}
 
-      <header className="sticky top-0 z-40 w-full border-b bg-background/80 backdrop-blur-md">
-        <div className="container mx-auto max-w-3xl flex h-14 items-center justify-between px-4">
-          <h1 className="font-bold text-lg tracking-tight">Discussion Hub</h1>
-          <div className="flex items-center gap-2">
-            <Input
-              value={mediaId} onChange={(e) => setMediaId(e.target.value)}
-              className="h-8 w-32 text-xs bg-muted/50"
-            />
-            <Button variant="ghost" size="icon" onClick={loadComments} className="h-8 w-8">
-              <span className={cn("text-xs font-bold", loading && "animate-spin")}>↻</span>
+function NestedReply({
+  reply,
+  depth,
+  onReply,
+  onVote,
+  onEdit,
+  onDelete,
+  onReport,
+  onExpand,
+}: {
+  reply: UiReply;
+  depth: number;
+  onReply: (reply: UiReply) => void;
+  onVote: (id: string, vote: 1 | -1) => void;
+  onEdit: (id: string, content: string) => void;
+  onDelete: (id: string) => void;
+  onReport: (id: string) => void;
+  onExpand: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-2" style={{ marginLeft: Math.min(depth, 6) * 16 }}>
+      <div className="flex gap-3 rounded-md border p-3">
+        <PostAvatar username={reply.user.username} avatar={reply.user.avatar_url} />
+        <div className="w-full space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-semibold">{reply.user.username}</span>
+            <span className="text-muted-foreground">{new Date(reply.created_at).toLocaleString()}</span>
+          </div>
+          <p className="text-sm">{reply.content}</p>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => onVote(reply.id, 1)}>
+              <ThumbsUp className={cn('h-3 w-3', reply.user_vote === 1 && 'text-primary')} /> {reply.score}
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => onVote(reply.id, -1)}>
+              <ThumbsDown className={cn('h-3 w-3', reply.user_vote === -1 && 'text-destructive')} />
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => onReply(reply)}>
+              <CornerDownRight className="h-3 w-3" /> Reply
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => onEdit(reply.id, reply.content)}>
+              <Edit2 className="h-3 w-3" /> Edit
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => onDelete(reply.id)}>
+              <Trash2 className="h-3 w-3" /> Delete
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => onReport(reply.id)}>
+              <Flag className="h-3 w-3" /> Report
+            </Button>
+            <Button variant="ghost" size="sm" className="h-7" onClick={() => onExpand(reply.id)}>
+              <ChevronDown className="h-3 w-3" /> Load children
             </Button>
           </div>
         </div>
-      </header>
+      </div>
+      {reply.children?.map((child) => (
+        <NestedReply
+          key={child.id}
+          reply={child}
+          depth={depth + 1}
+          onReply={onReply}
+          onVote={onVote}
+          onEdit={onEdit}
+          onDelete={onDelete}
+          onReport={onReport}
+          onExpand={onExpand}
+        />
+      ))}
+    </div>
+  );
+}
 
-      <main className="container mx-auto max-w-3xl p-4 space-y-8">
-        {comments.length === 0 && !loading && (
-          <div className="py-20 text-center text-muted-foreground text-sm">No comments yet. Start the conversation below.</div>
-        )}
+export default function CommentHub() {
+  const { isAuthenticated, role } = useAuth();
+  const [mediaId, setMediaId] = useState('anime-123');
+  const [comments, setComments] = useState<UiComment[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [commentCount, setCommentCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [mainContent, setMainContent] = useState('');
+  const [replyTarget, setReplyTarget] = useState<{ id: string; rootId: string; username: string } | null>(null);
+  const [replyContent, setReplyContent] = useState('');
+  const [editTarget, setEditTarget] = useState<{ id: string; value: string } | null>(null);
 
-        {comments.map((comment) => (
-          <div key={comment.id} className={cn("group animate-in fade-in slide-in-from-bottom-2", comment.isPending && "opacity-70")}>
-            <div className="flex gap-4">
-              <Avatar className="h-10 w-10 border shrink-0">
-                <AvatarImage src={comment.avatar_url} className="object-cover" />
-                <AvatarFallback className="bg-primary/10 text-primary font-bold">{comment.username[0]?.toUpperCase()}</AvatarFallback>
-              </Avatar>
+  const isModerator = role === 'admin' || role === 'moderator';
 
-              <div className="flex-1 space-y-2">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold">{comment.username}</span>
-                    <span className="text-xs text-muted-foreground">{new Date(comment.created_at).toLocaleDateString()}</span>
-                    {comment.username === user?.username && <Badge variant="secondary" className="text-[10px] h-4 px-1">YOU</Badge>}
-                  </div>
+  const loadComments = useCallback(async (reset = true) => {
+    setLoading(true);
+    try {
+      const data = await CommentumApi.listComments(mediaId, 20, reset ? undefined : cursor ?? undefined);
+      setCommentCount(data.comment_count ?? 0);
+      setCursor(data.next_cursor);
+      setComments((prev) => (reset ? data.comments.map((c) => ({ ...c, expanded: false })) : [...prev, ...data.comments]));
+    } catch {
+      toast.error('Failed to load comments');
+    } finally {
+      setLoading(false);
+    }
+  }, [cursor, mediaId]);
 
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      {isAuthenticated && <DropdownMenuItem onClick={() => setReplyingTo(comment.id)}><MessageSquare className="mr-2 h-3.5 w-3.5" /> Reply</DropdownMenuItem>}
-                      {comment.username === user?.username && <DropdownMenuItem onClick={() => startEditing(comment.id, comment.content)}><Edit2 className="mr-2 h-3.5 w-3.5" /> Edit</DropdownMenuItem>}
-                      {(comment.username === user?.username || isAdmin) && <DropdownMenuItem className="text-destructive focus:text-destructive" onClick={() => handleDelete(comment.id, false)}><Trash2 className="mr-2 h-3.5 w-3.5" /> Delete</DropdownMenuItem>}
-                      <DropdownMenuItem onClick={() => handleReport(comment.id)}><Flag className="mr-2 h-3.5 w-3.5" /> Report</DropdownMenuItem>
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </div>
+  useEffect(() => {
+    loadComments(true);
+  }, [loadComments]);
 
-                {editingId === comment.id ? (
-                  <div className="space-y-2">
-                    <Textarea value={editContent} onChange={(e) => setEditContent(e.target.value)} className="min-h-[80px]" />
-                    <div className="flex justify-end gap-2">
-                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>Cancel</Button>
-                      <Button size="sm" onClick={() => handleSaveEdit(comment.id, false)}>Save</Button>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-sm text-foreground/90 leading-relaxed">{comment.content}</p>
-                )}
+  const handleVote = async (postId: string, voteType: 1 | -1) => {
+    if (!isAuthenticated) return toast.error('Please log in to vote');
+    const apply = <T extends Post>(post: T): T => ({
+      ...post,
+      score: post.score - (post.user_vote || 0) + voteType,
+      user_vote: voteType,
+    });
 
-                <div className="flex items-center gap-4">
-                  <div className="flex items-center gap-1 bg-muted/40 rounded-full px-2 py-0.5 border">
-                    <ThumbsUp className={cn("h-4 w-4 cursor-pointer hover:text-primary transition-colors", comment.user_vote === 1 && "text-primary")} onClick={() => handleVote(comment.id, 1, false)} />
-                    <span className="text-xs font-bold w-4 text-center">{comment.score}</span>
-                    <ThumbsDown className={cn("h-4 w-4 cursor-pointer hover:text-destructive transition-colors", comment.user_vote === -1 && "text-destructive")} onClick={() => handleVote(comment.id, -1, false)} />
-                  </div>
-                  <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground hover:text-primary" onClick={() => setReplyingTo(replyingTo === comment.id ? null : comment.id)}>
-                    <MessageSquare className="mr-2 h-3.5 w-3.5" /> {comment.replies_count} Replies
-                  </Button>
-                </div>
+    setComments((prev) => prev.map((comment) => {
+      if (comment.id === postId) return apply(comment);
+      return {
+        ...comment,
+        replies: comment.replies?.map((reply) => reply.id === postId ? apply(reply) : reply),
+      };
+    }));
 
-                {replyingTo === comment.id && (
-                  <div className="mt-4 pl-4 border-l-2 border-primary/20 space-y-2 animate-in slide-in-from-top-2">
-                    <Textarea placeholder={`Replying to @${comment.username}...`} value={replyContent} onChange={(e) => setReplyContent(e.target.value)} className="min-h-[60px] text-sm" />
-                    <div className="flex justify-end gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => setReplyingTo(null)}>Cancel</Button>
-                      <Button size="sm" onClick={() => handlePostReply(comment.id)}>Reply</Button>
-                    </div>
-                  </div>
-                )}
+    try {
+      await CommentumApi.votePost(postId, voteType);
+    } catch {
+      toast.error('Vote failed. Refreshing comments.');
+      loadComments(true);
+    }
+  };
 
-                {/* Replies */}
-                {comment.replies && comment.replies.length > 0 && (
-                  <div className="mt-4 space-y-4 pl-6 border-l-2 border-border/50">
-                    {comment.replies.map(reply => (
-                      <div key={reply.id} className={cn("group/reply relative", reply.isPending && "opacity-60")}>
-                        <div className="flex gap-3">
-                          <Avatar className="h-8 w-8 border">
-                            <AvatarImage src={reply.avatar_url} className="object-cover" />
-                            <AvatarFallback className="text-[10px] font-bold">{reply.username[0]?.toUpperCase()}</AvatarFallback>
-                          </Avatar>
-                          <div className="flex-1 space-y-1">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <span className="text-xs font-bold">{reply.username}</span>
-                                <span className="text-[10px] text-muted-foreground">{new Date(reply.created_at).toLocaleDateString()}</span>
-                              </div>
-                              <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                  <Button variant="ghost" size="icon" className="h-5 w-5 opacity-0 group-hover/reply:opacity-100 transition-opacity">
-                                    <MoreHorizontal className="h-3 w-3" />
-                                  </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end">
-                                  {reply.username === user?.username && <DropdownMenuItem onClick={() => startEditing(reply.id, reply.content)}><Edit2 className="mr-2 h-3 w-3" /> Edit</DropdownMenuItem>}
-                                  {(reply.username === user?.username || isAdmin) && <DropdownMenuItem className="text-destructive" onClick={() => handleDelete(reply.id, true)}><Trash2 className="mr-2 h-3 w-3" /> Delete</DropdownMenuItem>}
-                                  <DropdownMenuItem onClick={() => handleReport(reply.id)}><Flag className="mr-2 h-3 w-3" /> Report</DropdownMenuItem>
-                                </DropdownMenuContent>
-                              </DropdownMenu>
-                            </div>
+  const postMain = async () => {
+    if (!mainContent.trim()) return;
+    try {
+      await CommentumApi.createPost({ media_id: mediaId, content: mainContent.trim(), client: 'commentum-panel' });
+      setMainContent('');
+      await loadComments(true);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to publish comment';
+      toast.error(message);
+    }
+  };
 
-                            {editingId === reply.id ? (
-                              <div className="space-y-2">
-                                <Input value={editContent} onChange={(e) => setEditContent(e.target.value)} className="h-8 text-xs" />
-                                <div className="flex gap-2">
-                                  <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setEditingId(null)}><X className="h-3 w-3" /></Button>
-                                  <Button size="icon" className="h-6 w-6" onClick={() => handleSaveEdit(reply.id, true)}><Check className="h-3 w-3" /></Button>
-                                </div>
-                              </div>
-                            ) : (
-                              <p className="text-xs text-foreground/90 leading-relaxed">{reply.content}</p>
-                            )}
+  const postReply = async () => {
+    if (!replyTarget || !replyContent.trim()) return;
+    try {
+      await CommentumApi.createPost({ parent_id: replyTarget.id, content: replyContent.trim(), client: 'commentum-panel' });
+      toast.success('Reply posted');
+      setReplyContent('');
+      setReplyTarget(null);
+      await expandReplies(replyTarget.rootId, true);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Failed to publish reply';
+      toast.error(message);
+    }
+  };
 
-                            <div className="flex items-center gap-3 pt-1">
-                              <ThumbsUp className={cn("h-3 w-3 cursor-pointer hover:text-primary transition-colors", reply.user_vote === 1 && "text-primary")} onClick={() => handleVote(reply.id, 1, true)} />
-                              <span className="text-[10px] font-bold">{reply.score}</span>
-                              <ThumbsDown className={cn("h-3 w-3 cursor-pointer hover:text-destructive", reply.user_vote === -1 && "text-destructive")} onClick={() => handleVote(reply.id, -1, true)} />
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+  const expandReplies = async (commentId: string, forceReload = false) => {
+    const target = comments.find((item) => item.id === commentId);
+    if (!target) return;
+    if (target.expanded && target.replies && !forceReload) {
+      setComments((prev) => prev.map((item) => item.id === commentId ? { ...item, expanded: false } : item));
+      return;
+    }
+
+    try {
+      const data = await CommentumApi.listReplies({ root_id: commentId, limit: 100 });
+      setComments((prev) => prev.map((item) => {
+        if (item.id !== commentId) return item;
+        const top = byParent(data.replies as UiReply[], commentId).map((reply) => ({ ...reply, children: [] }));
+        return { ...item, expanded: true, replies: top, replies_count: data.reply_count ?? top.length };
+      }));
+    } catch {
+      toast.error('Failed to load replies');
+    }
+  };
+
+  const expandNestedReplies = async (parentReplyId: string) => {
+    try {
+      const data = await CommentumApi.listReplies({ parent_id: parentReplyId, limit: 50 });
+      setComments((prev) => prev.map((comment) => ({
+        ...comment,
+        replies: comment.replies?.map((reply) => {
+          if (reply.id !== parentReplyId) return reply;
+          return { ...reply, children: data.replies as UiReply[], hasLoadedChildren: true };
+        }),
+      })));
+    } catch {
+      toast.error('Failed to load nested replies');
+    }
+  };
+
+  const askReport = async (id: string) => {
+    const reason = window.prompt('Reason for report:');
+    if (!reason) return;
+    try {
+      await CommentumApi.reportPost(id, reason);
+      toast.success('Report submitted');
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Report failed';
+      toast.error(message);
+    }
+  };
+
+  const startEdit = (id: string, current: string) => setEditTarget({ id, value: current });
+
+  const saveEdit = async () => {
+    if (!editTarget?.value.trim()) return;
+    try {
+      await CommentumApi.updatePost(editTarget.id, editTarget.value.trim());
+      setEditTarget(null);
+      toast.success('Post updated');
+      await loadComments(true);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Update failed';
+      toast.error(message);
+    }
+  };
+
+  const removePost = async (id: string) => {
+    try {
+      if (isModerator) {
+        await CommentumApi.setCommentStatus(id, 'removed');
+      } else {
+        await CommentumApi.deletePost(id);
+      }
+      toast.success('Post removed');
+      await loadComments(true);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : 'Delete failed';
+      toast.error(message);
+    }
+  };
+
+  const summary = useMemo(() => `${commentCount} comments`, [commentCount]);
+
+  return (
+    <div className="container mx-auto max-w-5xl space-y-6 p-4 pb-20">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border bg-card p-3">
+        <Input value={mediaId} onChange={(e) => setMediaId(e.target.value)} placeholder="media id" className="max-w-[220px]" />
+        <Button onClick={() => loadComments(true)} disabled={loading}>
+          <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} /> Refresh
+        </Button>
+        <Badge variant="outline">{summary}</Badge>
+        {isModerator && <Badge>Moderator mode</Badge>}
+      </div>
+
+      <div className="rounded-lg border bg-card p-3">
+        <Textarea value={mainContent} onChange={(e) => setMainContent(e.target.value)} placeholder={isAuthenticated ? 'Share your thoughts...' : 'Login required'} maxLength={500} disabled={!isAuthenticated} />
+        <div className="mt-2 flex justify-end">
+          <Button onClick={postMain} disabled={!isAuthenticated || loading || !mainContent.trim()}>
+            <Send className="mr-2 h-4 w-4" /> Post
+          </Button>
+        </div>
+      </div>
+
+      {replyTarget && (
+        <div className="rounded-lg border border-primary/30 bg-primary/5 p-3">
+          <p className="text-xs text-muted-foreground">Replying to @{replyTarget.username}</p>
+          <Textarea className="mt-2" value={replyContent} onChange={(e) => setReplyContent(e.target.value)} maxLength={500} />
+          <div className="mt-2 flex gap-2 justify-end">
+            <Button variant="ghost" onClick={() => setReplyTarget(null)}>Cancel</Button>
+            <Button onClick={postReply}>Reply</Button>
+          </div>
+        </div>
+      )}
+
+      {editTarget && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+          <p className="text-xs">Editing post</p>
+          <Textarea value={editTarget.value} onChange={(e) => setEditTarget({ ...editTarget, value: e.target.value })} maxLength={500} />
+          <div className="mt-2 flex gap-2 justify-end">
+            <Button variant="ghost" onClick={() => setEditTarget(null)}>Cancel</Button>
+            <Button onClick={saveEdit}>Save</Button>
+          </div>
+        </div>
+      )}
+
+      {loading && comments.length === 0 ? (
+        <div className="flex items-center justify-center py-16"><Loader2 className="h-6 w-6 animate-spin" /></div>
+      ) : comments.map((comment) => (
+        <div key={comment.id} className="rounded-lg border bg-card p-4 space-y-3">
+          <div className="flex gap-3">
+            <PostAvatar username={comment.user.username} avatar={comment.user.avatar_url} />
+            <div className="w-full space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="font-semibold text-sm">{comment.user.username}</p>
+                <p className="text-xs text-muted-foreground">{new Date(comment.created_at).toLocaleString()}</p>
+              </div>
+              <p>{comment.content}</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={() => handleVote(comment.id, 1)}><ThumbsUp className={cn('h-4 w-4', comment.user_vote === 1 && 'text-primary')} />{comment.score}</Button>
+                <Button variant="ghost" size="sm" onClick={() => handleVote(comment.id, -1)}><ThumbsDown className={cn('h-4 w-4', comment.user_vote === -1 && 'text-destructive')} /></Button>
+                <Button variant="ghost" size="sm" onClick={() => setReplyTarget({ id: comment.id, rootId: comment.id, username: comment.user.username })}><MessageSquare className="h-4 w-4" />Reply</Button>
+                <Button variant="ghost" size="sm" onClick={() => startEdit(comment.id, comment.content)}><Edit2 className="h-4 w-4" />Edit</Button>
+                <Button variant="ghost" size="sm" onClick={() => removePost(comment.id)}><Trash2 className="h-4 w-4" />Delete</Button>
+                <Button variant="ghost" size="sm" onClick={() => askReport(comment.id)}><Flag className="h-4 w-4" />Report</Button>
+                <Button variant="ghost" size="sm" onClick={() => expandReplies(comment.id)}>
+                  {comment.expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                  {comment.replies_count} Replies
+                </Button>
               </div>
             </div>
           </div>
-        ))}
-      </main>
 
-      {/* Bottom Input */}
-      <div className="fixed bottom-0 left-0 w-full p-4 z-50 bg-gradient-to-t from-background via-background/95 to-transparent pb-6 pt-10">
-        <div className="container mx-auto max-w-3xl">
-          <div className={cn("flex items-center gap-3 p-2 bg-background/80 backdrop-blur-xl border shadow-2xl rounded-2xl transition-all", isCooldown && "border-destructive/50 ring-1 ring-destructive/20")}>
-            <Avatar className="h-9 w-9 border-2 border-primary/10 shrink-0">
-              <AvatarImage src={user?.avatar_url} className="object-cover" />
-              <AvatarFallback className="bg-primary/10 text-primary text-xs font-bold">{user?.username?.[0]?.toUpperCase() || '?'}</AvatarFallback>
-            </Avatar>
-            <Input
-              placeholder={isAuthenticated ? "Write a comment..." : "Sign in to discuss"}
-              value={mainContent}
-              onChange={(e) => setMainContent(e.target.value)}
-              disabled={!isAuthenticated || loading}
-              onKeyDown={(e) => e.key === 'Enter' && handlePostMain()}
-              className="flex-1 h-10 bg-transparent border-none focus-visible:ring-0 text-sm"
-            />
-            {mainContent.trim().length > 0 && (
-              <Button onClick={handlePostMain} disabled={loading || !isAuthenticated || isCooldown} size="icon" className="h-9 w-9 rounded-xl shadow-md transition-all active:scale-95">
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              </Button>
-            )}
-          </div>
-          {isCooldown && <p className="text-[10px] text-destructive text-center mt-2 font-bold animate-pulse">Cooldown Active</p>}
+          {comment.expanded && (
+            <div className="space-y-2 border-l pl-3">
+              {comment.replies?.length ? comment.replies.map((reply) => (
+                <NestedReply
+                  key={reply.id}
+                  reply={reply}
+                  depth={1}
+                  onReply={(target) => setReplyTarget({ id: target.id, rootId: comment.id, username: target.user.username })}
+                  onVote={handleVote}
+                  onEdit={startEdit}
+                  onDelete={removePost}
+                  onReport={askReport}
+                  onExpand={expandNestedReplies}
+                />
+              )) : <p className="text-xs text-muted-foreground">No replies yet.</p>}
+            </div>
+          )}
         </div>
-      </div>
+      ))}
+
+      {cursor && (
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={() => loadComments(false)} disabled={loading}>Load more comments</Button>
+        </div>
+      )}
     </div>
-  )
+  );
 }
