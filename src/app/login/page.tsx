@@ -65,9 +65,9 @@ export default function LoginPage() {
           <div className="rounded-lg bg-muted p-4 text-xs text-muted-foreground">
             <p className="font-bold text-foreground mb-2">How it works:</p>
             <ul className="grid gap-1.5 list-disc list-inside">
-              <li>You'll be redirected to AniList to sign in</li>
+              <li>You&apos;ll be redirected to AniList to sign in</li>
               <li>Approve the permissions request</li>
-              <li>You'll be redirected back with access granted</li>
+              <li>You&apos;ll be redirected back with access granted</li>
             </ul>
           </div>
         </CardContent>
