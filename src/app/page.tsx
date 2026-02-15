@@ -146,7 +146,11 @@ export default function CommentHub() {
 
   const handleVote = async (postId: string, voteType: 1 | -1) => {
     if (!isAuthenticated) return toast.error('Please log in to vote');
-    const apply = (post: Post) => ({ ...post, score: post.score - (post.user_vote || 0) + voteType, user_vote: voteType as 1 | -1 });
+    const apply = <T extends Post>(post: T): T => ({
+      ...post,
+      score: post.score - (post.user_vote || 0) + voteType,
+      user_vote: voteType,
+    });
 
     setComments((prev) => prev.map((comment) => {
       if (comment.id === postId) return apply(comment);
